@@ -1,0 +1,94 @@
+import "dotenv/config";
+import { test, expect, type APIRequestContext } from "@playwright/test";
+import { db } from "../../lib/db";
+import { randomUUID } from "node:crypto";
+import type { Snapshot } from "../../lib/contracts";
+const origin = process.env.BETTER_AUTH_URL || "http://localhost:3000";
+
+test("credenciamento, saída, reentrada, correção e sincronização entre tablets", async ({ browser, page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  const signIn = await page.request.post("/api/auth/sign-in/email", { headers: { Origin: origin }, data: { email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD } });
+  expect(signIn.ok()).toBeTruthy();
+  const post = (request: APIRequestContext, path: string, data: unknown) => request.post(path, { headers: { Origin: origin }, data });
+  const created = await post(page.request, "/api/events", { name: "TESTE E2E Elevation", edition: "Teste automatizado", venue: "Ambiente de teste", startsAt: "2026-10-22T14:00:00-03:00", endsAt: "2026-10-22T19:00:00-03:00", capacity: 100 });
+  expect(created.status()).toBe(201);
+  const event = await created.json();
+  const tablet = await browser.newContext({ baseURL: origin });
+  try {
+    const imported = await post(page.request, `/api/events/${event.id}/import`, { rows: [{ name: "Ana Teste E2E", email: "ana-e2e@example.com", phone: "43999999999", company: "Teste", ticket: "1º lote" }, { name: "Júlia Teste E2E", email: "julia-e2e@example.com", phone: "43888888888", company: "Teste", ticket: "Geral" }] });
+    expect(imported.ok()).toBeTruthy();
+    const repeatedImport = await post(page.request, `/api/events/${event.id}/import`, { rows: [{ name: "Ana Teste E2E", email: "ana-e2e@example.com", phone: "43999999999", ticket: "1º lote" }] });
+    expect((await repeatedImport.json()).skipped).toBe(1);
+    await tablet.addCookies(await page.context().cookies());
+    const second = await tablet.newPage();
+    await page.goto("/"); await second.goto("/");
+    await page.locator("#event-selector").selectOption(event.id);
+    await second.locator("#event-selector").selectOption(event.id);
+    await expect(page.getByText("Sincronizado ao vivo")).toBeVisible();
+    await page.getByRole("button", { name: "Credenciamento" }).click();
+    const ana = page.locator("tr").filter({ hasText: "Ana Teste E2E" });
+    await ana.getByRole("button", { name: "Confirmar entrada" }).click();
+    await expect(ana.locator(".status-badge").filter({ hasText: /^No evento$/ })).toBeVisible();
+    await expect(second.locator(".stat-card.highlight .stat-value")).toHaveText("1");
+    await ana.getByRole("button", { name: "Saída", exact: true }).click();
+    await page.getByRole("button", { name: "Confirmar saída", exact: true }).click();
+    await expect(ana.locator(".status-badge").filter({ hasText: /^Saída temporária$/ })).toBeVisible();
+    await expect(second.locator(".stat-card.highlight .stat-value")).toHaveText("0");
+    await ana.getByRole("button", { name: "Reentrada", exact: true }).click();
+    await expect(ana.locator(".status-badge").filter({ hasText: /^No evento$/ })).toBeVisible();
+    await ana.getByRole("button", { name: "Foi embora", exact: true }).click();
+    await page.getByRole("button", { name: "Confirmar saída", exact: true }).click();
+    await expect(ana.locator(".status-badge").filter({ hasText: /^Foi embora$/ })).toBeVisible();
+    const getSnapshot = async () => (await (await page.request.get(`/api/events/${event.id}/snapshot`)).json()) as Snapshot;
+    let state = await getSnapshot();
+    const anaRegistration = state.registrations.find(r => r.participant.name === "Ana Teste E2E")!;
+    const departure = state.movements.at(-1)!;
+    const correction = await page.request.patch(`/api/events/${event.id}/movements`, { headers: { Origin: origin }, data: { movementId: departure.id, reason: "Saída registrada por engano no teste." } });
+    expect(correction.ok()).toBeTruthy();
+    await expect(ana.locator(".status-badge").filter({ hasText: /^No evento$/ })).toBeVisible();
+    state = await getSnapshot();
+    const julia = state.registrations.find(r => r.participant.name === "Júlia Teste E2E")!;
+    const payload = { registrationId: julia.id, kind: "ENTRY", version: julia.version, requestId: randomUUID() };
+    const concurrent = await Promise.all([post(page.request, `/api/events/${event.id}/movements`, payload), post(tablet.request, `/api/events/${event.id}/movements`, { ...payload, requestId: randomUUID() })]);
+    expect(concurrent.map(r => r.status()).sort()).toEqual([201, 409]);
+    const successIndex = concurrent.findIndex(r => r.status() === 201);
+    const replay = await post(page.request, `/api/events/${event.id}/movements`, { ...payload, requestId: successIndex === 0 ? payload.requestId : (await concurrent[1].json()).requestId });
+    expect(replay.status()).toBe(201);
+    state = await getSnapshot();
+    expect(state.registrations.find(r => r.id === julia.id)?.state).toBe("INSIDE");
+    expect(state.movements.filter(m => m.registrationId === julia.id && !m.voidedAt)).toHaveLength(1);
+    expect(state.movements.find(m => m.id === departure.id)?.voidReason).toContain("engano");
+    expect(state.registrations.find(r => r.id === anaRegistration.id)?.state).toBe("INSIDE");
+    await second.getByRole("button", { name: "Relatórios", exact: true }).click();
+    const downloadPromise = second.waitForEvent("download");
+    await second.getByRole("button", { name: "Participantes CSV", exact: true }).click();
+    expect((await downloadPromise).suggestedFilename()).toContain("participantes");
+    await page.getByRole("button", { name: "Visão geral", exact: true }).click();
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({ path: "test-results/dashboard-desktop.png", fullPage: true });
+    await page.setViewportSize({ width: 820, height: 1180 });
+    await page.screenshot({ path: "test-results/dashboard-tablet.png", fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator(".workspace-main")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+    await page.screenshot({ path: "test-results/dashboard-mobile.png", fullPage: true });
+    expect(errors).toEqual([]);
+  } finally {
+    await tablet.close();
+    const registrations = await db.registration.findMany({ where: { eventId: event.id }, select: { id: true, participantId: true } });
+    await db.movement.deleteMany({ where: { registrationId: { in: registrations.map(r => r.id) } } });
+    await db.registration.deleteMany({ where: { eventId: event.id } });
+    await db.participant.deleteMany({ where: { id: { in: registrations.map(r => r.participantId) } } });
+    await db.event.delete({ where: { id: event.id } });
+  }
+});
+
+test("dados privados exigem sessão e escritas rejeitam origem externa", async ({ request }) => {
+  expect((await request.get("/api/events")).status()).toBe(401);
+  expect((await request.post("/api/events", { headers: { Origin: "https://outra-origem.example" }, data: {} })).status()).toBe(403);
+  const publicSignup = await request.post("/api/auth/sign-up/email", { headers: { Origin: origin }, data: { name: "Invasor", email: "blocked-e2e@example.com", password: "blocked-password-123" } });
+  expect(publicSignup.ok()).toBeFalsy();
+});
+
+test.afterAll(async () => { await db.$disconnect(); });

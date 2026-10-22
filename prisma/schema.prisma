@@ -1,0 +1,151 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["presenca"]
+}
+
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  role          String    @default("RECEPTION")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+  movements     Movement[] @relation("RecordedBy")
+  corrections   Movement[] @relation("VoidedBy")
+  @@schema("presenca")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+  @@schema("presenca")
+}
+
+model Account {
+  id                     String    @id
+  accountId              String
+  providerId             String
+  userId                 String
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken            String?
+  refreshToken           String?
+  idToken                String?
+  accessTokenExpiresAt   DateTime?
+  refreshTokenExpiresAt  DateTime?
+  scope                  String?
+  password               String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  @@index([userId])
+  @@schema("presenca")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  @@index([identifier])
+  @@schema("presenca")
+}
+
+model RateLimit {
+  id          String @id @default(cuid())
+  key         String @unique
+  count       Int
+  lastRequest BigInt
+  @@schema("presenca")
+}
+
+model Event {
+  id            String         @id @default(cuid())
+  name          String
+  edition       String         @default("")
+  startsAt      DateTime
+  endsAt        DateTime
+  venue         String
+  capacity      Int            @default(200)
+  status        String         @default("OPEN")
+  revision      Int            @default(0)
+  createdAt     DateTime       @default(now())
+  registrations Registration[]
+  @@index([startsAt])
+  @@schema("presenca")
+}
+
+model Participant {
+  id            String         @id @default(cuid())
+  name          String
+  email         String?
+  phone         String?
+  phoneOriginal String?
+  document      String?
+  company       String?
+  createdAt     DateTime       @default(now())
+  registrations Registration[]
+  @@schema("presenca")
+}
+
+model Registration {
+  id            String      @id @default(cuid())
+  eventId       String
+  event         Event       @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  participantId String
+  participant   Participant @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  ticket        String      @default("Geral")
+  source        String      @default("MANUAL")
+  externalId    String?
+  sourceRegisteredAt     DateTime?
+  sourceCapturedAt       DateTime?
+  grossAmountCents       Int?
+  netAmountRecordedCents Int?
+  coupon                 String?
+  identityKey   String?
+  state         String      @default("EXPECTED")
+  version       Int         @default(0)
+  createdAt     DateTime    @default(now())
+  movements     Movement[]
+  @@unique([eventId, participantId])
+  @@unique([eventId, externalId])
+  @@unique([eventId, identityKey])
+  @@index([eventId, state])
+  @@schema("presenca")
+}
+
+model Movement {
+  id             String       @id @default(cuid())
+  registrationId String
+  registration   Registration @relation(fields: [registrationId], references: [id], onDelete: Restrict)
+  kind           String
+  previousState  String
+  nextState      String
+  recordedAt     DateTime     @default(now())
+  recordedById   String
+  recordedBy     User         @relation("RecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  requestId      String       @unique
+  voidedAt       DateTime?
+  voidedById     String?
+  voidedBy       User?        @relation("VoidedBy", fields: [voidedById], references: [id], onDelete: Restrict)
+  voidReason     String?
+  @@index([registrationId, recordedAt])
+  @@schema("presenca")
+}

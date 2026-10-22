@@ -1,0 +1,10 @@
+export type State = "EXPECTED" | "INSIDE" | "OUTSIDE" | "LEFT";
+export type MoveKind = "ENTRY" | "EXIT" | "DEPARTURE";
+export type Operator = { id: string; name: string; email: string; role: string };
+export type EventInfo = { id: string; name: string; edition: string; startsAt: string; endsAt: string; venue: string; capacity: number; status: string; revision: number; _count?: { registrations: number } };
+export type Person = { id: string; name: string; email: string | null; phone: string | null; company: string | null };
+export type RegistrationInfo = { id: string; participant: Person; ticket: string; source: string; state: State; version: number; createdAt: string };
+export type MovementInfo = { id: string; registrationId: string; name: string; kind: MoveKind; previousState: State; nextState: State; recordedAt: string; operator: string; voidedAt: string | null; voidReason: string | null; correctedBy: string | null };
+export type Snapshot = { event: EventInfo; registrations: RegistrationInfo[]; movements: MovementInfo[]; serverTime: string };
+export const stateLabels: Record<State, string> = { EXPECTED: "Aguardando", INSIDE: "No evento", OUTSIDE: "Saída temporária", LEFT: "Foi embora" };
+export const moveLabels: Record<MoveKind, string> = { ENTRY: "Entrada", EXIT: "Saída temporária", DEPARTURE: "Foi embora" };
