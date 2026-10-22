@@ -1,0 +1,37 @@
+# Instalações e builds locais nunca entram no contexto Linux.
+node_modules
+**/node_modules
+.next
+**/.next
+generated
+out
+dist
+build
+
+# Credenciais, listas privadas e capturas locais.
+.env
+.env.*
+!.env.example
+.private
+Captura de tela*.png
+test-results
+playwright-report
+coverage
+tests
+playwright.config.ts
+
+# Git, ferramentas e documentação de desenvolvimento.
+.git
+.gitignore
+.agents
+.codex
+.superpowers
+.idea
+.vscode
+docs
+AGENTS.md
+CLAUDE.md
+*.log
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
